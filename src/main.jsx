@@ -5,6 +5,7 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  Bell,
   Circle,
   ClipboardList,
   Hash,
@@ -27,7 +28,7 @@ const channels = [
     id: 'general',
     name: 'general-staff',
     title: 'Chat general del staff',
-    description: 'Coordinacion operativa en tiempo real durante MONUR XVIII.',
+    description: 'Coordinación operativa en tiempo real durante MONUR XVIII.',
   },
   {
     id: 'incidents',
@@ -43,7 +44,7 @@ const channels = [
   },
 ];
 
-const incidentTypes = ['Logistica', 'Seguridad', 'Delegacion', 'Protocolo', 'Tecnologia', 'Salud', 'Otro'];
+const incidentTypes = ['Logística', 'Seguridad', 'Delegación', 'Protocolo', 'Tecnología', 'Salud', 'Otro'];
 const channelById = Object.fromEntries(channels.map((channel) => [channel.id, channel]));
 
 function App() {
@@ -56,9 +57,16 @@ function RealtimeWorkspace() {
   const [messages, setMessages] = useState([]);
   const [incidents, setIncidents] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [unreadByChannel, setUnreadByChannel] = useState({});
+
+  function openChannel(channelId) {
+    setActiveChannel(channelId);
+    setUnreadByChannel((current) => ({ ...current, [channelId]: 0 }));
+  }
 
   useEffect(() => {
     loadMessages(activeChannel).then(setMessages);
+    setUnreadByChannel((current) => ({ ...current, [activeChannel]: 0 }));
     const channel = supabase
       .channel(`monur-messages-${activeChannel}`)
       .on('postgres_changes', {
@@ -89,25 +97,32 @@ function RealtimeWorkspace() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'staff_messages' }, (payload) => {
         const message = payload.new;
         if (message.staff_name === profile.name) return;
+        if (message.channel !== activeChannel) {
+          setUnreadByChannel((current) => ({
+            ...current,
+            [message.channel]: (current[message.channel] || 0) + 1,
+          }));
+        }
         pushNotification(setNotifications, {
           channel: message.channel,
-          title: `${message.staff_name} escribio en #${getChannelName(message.channel)}`,
+          title: `${message.staff_name} escribió en #${getChannelName(message.channel)}`,
           body: message.body,
-          onOpen: () => setActiveChannel(message.channel),
+          onOpen: () => openChannel(message.channel),
         });
       })
       .subscribe();
     return () => supabase.removeChannel(channel);
-  }, [profile.name, profile.ready]);
+  }, [activeChannel, profile.name, profile.ready]);
 
   async function sendMessage(body) {
-    await supabase.from('staff_messages').insert({
+    const { error } = await supabase.from('staff_messages').insert({
       channel: activeChannel,
       body,
       staff_name: profile.name,
       staff_role: profile.role,
       committee: profile.committee,
     });
+    if (error) throw error;
   }
 
   async function createIncident(payload) {
@@ -130,7 +145,7 @@ function RealtimeWorkspace() {
         channel: 'incidents',
         title: `Incidente publicado en #${getChannelName('incidents')}`,
         body: data.title,
-        onOpen: () => setActiveChannel('incidents'),
+        onOpen: () => openChannel('incidents'),
       });
     }
   }
@@ -145,13 +160,14 @@ function RealtimeWorkspace() {
     <Workspace
       profile={profile}
       activeChannel={activeChannel}
-      setActiveChannel={setActiveChannel}
+      setActiveChannel={openChannel}
       messages={messages}
       incidents={incidents}
       onSend={sendMessage}
       onCreateIncident={createIncident}
       onUpdateIncidentStatus={updateIncidentStatus}
       notifications={notifications}
+      unreadByChannel={unreadByChannel}
       onDismissNotification={(id) => setNotifications((current) => current.filter((n) => n.id !== id))}
     />
   );
@@ -161,47 +177,48 @@ function DemoWorkspace() {
   const profile = useStaffProfile();
   const [activeChannel, setActiveChannel] = useState('general');
   const [notifications, setNotifications] = useState([]);
+  const [unreadByChannel, setUnreadByChannel] = useState({ incidents: 1 });
   const [messages, setMessages] = useState([
     {
       id: 'demo-1',
       channel: 'general',
       body: 'Bienvenidos al canal operativo de MONUR XVIII.',
-      staff_name: 'Coordinacion General',
-      staff_role: 'Direccion',
-      committee: 'Secretaria',
+      staff_name: 'Coordinación General',
+      staff_role: 'Dirección',
+      committee: 'Secretaría',
       created_at: new Date().toISOString(),
     },
     {
       id: 'demo-2',
       channel: 'incidents',
-      body: 'Incidente reportado: retraso en acreditacion. Prioridad media.',
-      staff_name: 'Equipo Logistico',
+      body: 'Incidente reportado: retraso en acreditación. Prioridad media.',
+      staff_name: 'Equipo Logístico',
       staff_role: 'Staff',
-      committee: 'Logistica',
+      committee: 'Logística',
       created_at: new Date().toISOString(),
     },
   ]);
   const [incidents, setIncidents] = useState([
     {
       id: 'incident-demo-1',
-      title: 'Retraso en acreditacion',
-      type: 'Logistica',
+      title: 'Retraso en acreditación',
+      type: 'Logística',
       priority: 'media',
       status: 'abierto',
-      location: 'Area de registro',
+      location: 'Área de registro',
       description: 'Fila con alto volumen de participantes.',
-      reporter_name: 'Equipo Logistico',
+      reporter_name: 'Equipo Logístico',
       reporter_role: 'Staff',
-      committee: 'Logistica',
+      committee: 'Logística',
       created_at: new Date().toISOString(),
     },
     {
       id: 'incident-demo-2',
-      title: 'Solicitud de apoyo medico',
+      title: 'Solicitud de apoyo médico',
       type: 'Salud',
       priority: 'critica',
       status: 'en_revision',
-      location: 'Salon principal',
+      location: 'Salón principal',
       description: 'Participante requiere asistencia inmediata.',
       reporter_name: 'Equipo Salud',
       reporter_role: 'Staff',
@@ -209,6 +226,11 @@ function DemoWorkspace() {
       created_at: new Date().toISOString(),
     },
   ]);
+
+  function openChannel(channelId) {
+    setActiveChannel(channelId);
+    setUnreadByChannel((current) => ({ ...current, [channelId]: 0 }));
+  }
 
   function sendMessage(body) {
     setMessages((current) => [...current, {
@@ -224,7 +246,7 @@ function DemoWorkspace() {
       channel: activeChannel,
       title: `Mensaje enviado en #${getChannelName(activeChannel)}`,
       body,
-      onOpen: () => setActiveChannel(activeChannel),
+      onOpen: () => openChannel(activeChannel),
     });
   }
 
@@ -248,11 +270,14 @@ function DemoWorkspace() {
       committee: profile.committee,
       created_at: new Date().toISOString(),
     }]);
+    if (activeChannel !== 'incidents') {
+      setUnreadByChannel((current) => ({ ...current, incidents: (current.incidents || 0) + 1 }));
+    }
     pushNotification(setNotifications, {
       channel: 'incidents',
       title: `Incidente publicado en #${getChannelName('incidents')}`,
       body: incident.title,
-      onOpen: () => setActiveChannel('incidents'),
+      onOpen: () => openChannel('incidents'),
     });
   }
 
@@ -266,13 +291,14 @@ function DemoWorkspace() {
     <Workspace
       profile={profile}
       activeChannel={activeChannel}
-      setActiveChannel={setActiveChannel}
+      setActiveChannel={openChannel}
       messages={messages.filter((message) => message.channel === activeChannel)}
       incidents={incidents}
       onSend={sendMessage}
       onCreateIncident={createIncident}
       onUpdateIncidentStatus={updateIncidentStatus}
       notifications={notifications}
+      unreadByChannel={unreadByChannel}
       onDismissNotification={(id) => setNotifications((current) => current.filter((n) => n.id !== id))}
       demo
     />
@@ -280,7 +306,20 @@ function DemoWorkspace() {
 }
 
 function Workspace(props) {
-  const { profile, activeChannel, setActiveChannel, messages, incidents, onSend, onCreateIncident, onUpdateIncidentStatus, notifications = [], onDismissNotification, demo = false } = props;
+  const {
+    profile,
+    activeChannel,
+    setActiveChannel,
+    messages,
+    incidents,
+    onSend,
+    onCreateIncident,
+    onUpdateIncidentStatus,
+    notifications = [],
+    unreadByChannel = {},
+    onDismissNotification,
+    demo = false,
+  } = props;
   const active = channels.find((channel) => channel.id === activeChannel);
 
   return (
@@ -293,7 +332,8 @@ function Workspace(props) {
         <nav className="channel-list" aria-label="Canales">
           {channels.map((channel) => (
             <button key={channel.id} className={activeChannel === channel.id ? 'channel active' : 'channel'} onClick={() => setActiveChannel(channel.id)}>
-              <Hash size={18} /><span>{channel.name}</span>
+              <span className="channel-main"><Hash size={18} /><span>{channel.name}</span></span>
+              {Boolean(unreadByChannel[channel.id]) && <span className="unread-badge">{unreadByChannel[channel.id]}</span>}
             </button>
           ))}
         </nav>
@@ -307,7 +347,10 @@ function Workspace(props) {
       <section className="chat-panel">
         <header className="topbar">
           <div><h1><Hash size={22} /> {active.title}</h1><p>{active.description}</p></div>
-          {demo && <span className="mode-pill">Demo sin Supabase</span>}
+          <div className="topbar-actions">
+            <span className="channel-status"><Bell size={15} /> {notifications.length || 'Sin'} alertas</span>
+            {demo && <span className="mode-pill">Demo sin Supabase</span>}
+          </div>
         </header>
         {activeChannel === 'general' && <CommandOverview incidents={incidents} messages={messages} profile={profile} />}
         <MessageList messages={messages} currentName={profile.name} />
@@ -332,7 +375,7 @@ function CommandOverview({ incidents, messages, profile }) {
       <div className="hero-brief">
         <span className="eyebrow"><Activity size={15} /> Centro de mando activo</span>
         <h2>Bienvenido al canal general, {profile.name.split(' ')[0] || 'Staff'}.</h2>
-        <p>Coordina al equipo, monitorea reportes y mantente al tanto de las incidencias mas importantes desde una vista preparada para escritorio, tablet y telefono.</p>
+        <p>Coordina al equipo, monitorea reportes y mantente al tanto de las incidencias más importantes desde una vista preparada para escritorio, tablet y teléfono.</p>
         <div className="hero-actions">
           <span><Circle size={10} fill="currentColor" /> {stats.open} abiertos</span>
           <span><TrendingUp size={15} /> {stats.total} reportes totales</span>
@@ -342,7 +385,7 @@ function CommandOverview({ incidents, messages, profile }) {
       <div className="metric-grid">
         <MetricCard label="Incidencias" value={stats.total} tone="blue" />
         <MetricCard label="Activas" value={stats.open} tone="amber" />
-        <MetricCard label="Criticas" value={stats.critical} tone="red" />
+        <MetricCard label="Críticas" value={stats.critical} tone="red" />
         <MetricCard label="Resueltas" value={stats.resolved} tone="green" />
       </div>
       <div className="charts-grid">
@@ -350,7 +393,7 @@ function CommandOverview({ incidents, messages, profile }) {
         <TypeChart counts={stats.byType} total={Math.max(stats.total, 1)} />
       </div>
       <div className="ops-note">
-        <strong>{latestCritical ? latestCritical.title : 'Sin alertas criticas activas'}</strong>
+        <strong>{latestCritical ? latestCritical.title : 'Sin alertas críticas activas'}</strong>
         <span>{latestCritical ? `${latestCritical.location} - ${latestCritical.type}` : 'El equipo puede continuar operando desde el canal general.'}</span>
       </div>
     </section>
@@ -362,7 +405,7 @@ function MetricCard({ label, value, tone }) {
 }
 
 function PriorityChart({ counts, total }) {
-  const priorities = [['critica', 'Critica'], ['alta', 'Alta'], ['media', 'Media'], ['baja', 'Baja']];
+  const priorities = [['critica', 'Crítica'], ['alta', 'Alta'], ['media', 'Media'], ['baja', 'Baja']];
   return (
     <article className="chart-card">
       <h3>Reportes por prioridad</h3>
@@ -381,7 +424,7 @@ function TypeChart({ counts, total }) {
   const topTypes = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
   return (
     <article className="chart-card">
-      <h3>Incidencias por area</h3>
+      <h3>Incidencias por área</h3>
       <div className="type-chart">
         {(topTypes.length ? topTypes : [['Sin reportes', 0]]).map(([type, count]) => (
           <div className="type-row" key={type}>
@@ -405,12 +448,12 @@ function StaffEntry({ onSave, demo = false }) {
       <form className="entry-card" onSubmit={submit}>
         <div className="brand-icon"><UsersRound size={32} /></div>
         <h1>MONUR XVIII Staff Chat</h1>
-        <p>Ingrese su informacion para entrar al canal de comunicacion operativo.</p>
-        {demo && <div className="demo-banner">Modo demo. Al completar el .env usara Supabase en tiempo real.</div>}
+        <p>Ingrese su información para entrar al canal de comunicación operativo.</p>
+        {demo && <div className="demo-banner">Modo demo. Al completar el .env usará Supabase en tiempo real.</div>}
         <TextInput label="Nombre" value={form.name} onChange={(name) => setForm({ ...form, name })} required />
         <TextInput label="Rol o cargo" value={form.role} onChange={(role) => setForm({ ...form, role })} required />
-        <TextInput label="Comite o area" value={form.committee} onChange={(committee) => setForm({ ...form, committee })} required />
-        <button className="primary-button">Entrar al canal</button>
+        <TextInput label="Comité o área" value={form.committee} onChange={(committee) => setForm({ ...form, committee })} required />
+        <button className="primary-button entry-submit">Entrar al canal</button>
       </form>
     </main>
   );
@@ -421,6 +464,7 @@ function MessageList({ messages, currentName }) {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages.length]);
   return (
     <div className="message-list">
+      {messages.length === 0 && <div className="empty-chat">Todavía no hay mensajes en este canal.</div>}
       {messages.map((message) => (
         <article key={message.id} className={message.staff_name === currentName ? 'staff-message mine' : 'staff-message'}>
           <div className="message-avatar">{initials(message.staff_name)}</div>
@@ -437,17 +481,46 @@ function MessageList({ messages, currentName }) {
 
 function Composer({ channelName, onSend }) {
   const [body, setBody] = useState('');
-  function submit(event) {
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit(event) {
     event.preventDefault();
     const cleanBody = body.trim();
-    if (!cleanBody) return;
-    onSend(cleanBody);
-    setBody('');
+    if (!cleanBody || sending) return;
+    setSending(true);
+    setError('');
+    try {
+      await onSend(cleanBody);
+      setBody('');
+    } catch {
+      setError('No se pudo enviar el mensaje. Inténtalo nuevamente.');
+    } finally {
+      setSending(false);
+    }
   }
+
+  function handleKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
   return (
     <form className="composer" onSubmit={submit}>
-      <input value={body} onChange={(event) => setBody(event.target.value)} placeholder={`Enviar mensaje a #${channelName}`} />
-      <button className="send-button" title="Enviar"><Send size={18} /></button>
+      <div className="composer-input">
+        <textarea
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={`Enviar mensaje a #${channelName}`}
+          aria-label={`Enviar mensaje a ${channelName}`}
+          rows={1}
+        />
+        {error && <span className="composer-error">{error}</span>}
+      </div>
+      <button className="send-button" title="Enviar" aria-label="Enviar mensaje" disabled={!body.trim() || sending}><Send size={18} /></button>
     </form>
   );
 }
@@ -466,11 +539,11 @@ function IncidentForm({ onCreate }) {
       <button className="incident-toggle" onClick={() => setOpen((value) => !value)}><AlertTriangle size={18} />Reportar incidente</button>
       {open && (
         <form className="incident-form" onSubmit={submit}>
-          <TextInput label="Titulo" value={form.title} onChange={(title) => setForm({ ...form, title })} required />
+          <TextInput label="Título" value={form.title} onChange={(title) => setForm({ ...form, title })} required />
           <label className="field"><span>Tipo</span><select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>{incidentTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
-          <label className="field"><span>Prioridad</span><select value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option><option value="critica">Critica</option></select></label>
-          <TextInput label="Ubicacion" value={form.location} onChange={(location) => setForm({ ...form, location })} required />
-          <label className="field"><span>Descripcion</span><textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} required /></label>
+          <label className="field"><span>Prioridad</span><select value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option><option value="critica">Crítica</option></select></label>
+          <TextInput label="Ubicación" value={form.location} onChange={(location) => setForm({ ...form, location })} required />
+          <label className="field"><span>Descripción</span><textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} required /></label>
           <button className="primary-button">Guardar incidente</button>
         </form>
       )}
@@ -492,7 +565,7 @@ function IncidentList({ incidents, onUpdateStatus }) {
           <small>Reportado por {incident.reporter_name}</small>
           <select value={incident.status} onChange={(event) => onUpdateStatus(incident.id, event.target.value)}>
             <option value="abierto">Abierto</option>
-            <option value="en_revision">En revision</option>
+            <option value="en_revision">En revisión</option>
             <option value="resuelto">Resuelto</option>
             <option value="cerrado">Cerrado</option>
           </select>
@@ -512,7 +585,7 @@ function NotificationStack({ notifications, onDismiss }) {
             <span className="notification-channel"><Megaphone size={15} />#{getChannelName(notification.channel)}</span>
             <strong>{notification.title}</strong><span>{notification.body}</span>
           </button>
-          <button className="notification-close" onClick={() => onDismiss(notification.id)} aria-label="Cerrar notificacion">x</button>
+          <button className="notification-close" onClick={() => onDismiss(notification.id)} aria-label="Cerrar notificación">x</button>
         </article>
       ))}
     </div>
@@ -573,9 +646,33 @@ function cleanPreview(value) {
 function pushNotification(setNotifications, notification) {
   const nextNotification = { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, ...notification, body: cleanPreview(notification.body || '') };
   setNotifications((current) => [nextNotification, ...current].slice(0, 4));
+  showBrowserNotification(nextNotification);
   window.setTimeout(() => {
     setNotifications((current) => current.filter((currentNotification) => currentNotification.id !== nextNotification.id));
   }, 6500);
+}
+
+function showBrowserNotification(notification) {
+  if (!('Notification' in window)) return;
+  const notify = () => {
+    const browserNotification = new Notification(notification.title, {
+      body: notification.body,
+      tag: notification.channel,
+      silent: false,
+    });
+    browserNotification.onclick = () => {
+      window.focus();
+      notification.onOpen?.();
+      browserNotification.close();
+    };
+  };
+  if (Notification.permission === 'granted') {
+    notify();
+  } else if (Notification.permission === 'default') {
+    Notification.requestPermission().then((permission) => {
+      if (permission === 'granted') notify();
+    });
+  }
 }
 
 function buildIncidentStats(incidents) {
