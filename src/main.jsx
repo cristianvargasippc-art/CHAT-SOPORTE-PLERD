@@ -25,7 +25,7 @@ const channels = [
     id: 'general',
     name: 'general-staff',
     title: 'Chat general del staff',
-    description: 'Coordinacion operativa en tiempo real durante MONUR XVIII.',
+    description: 'Coordinación operativa en tiempo real durante MONUR XVIII.',
   },
   {
     id: 'incidents',
@@ -42,14 +42,16 @@ const channels = [
 ];
 
 const incidentTypes = [
-  'Logistica',
+  'Logística',
   'Seguridad',
-  'Delegacion',
+  'Delegación',
   'Protocolo',
-  'Tecnologia',
+  'Tecnología',
   'Salud',
   'Otro',
 ];
+
+const channelById = Object.fromEntries(channels.map((channel) => [channel.id, channel]));
 
 function App() {
   return supabase ? <RealtimeWorkspace /> : <DemoWorkspace />;
@@ -60,6 +62,7 @@ function RealtimeWorkspace() {
   const [activeChannel, setActiveChannel] = useState('general');
   const [messages, setMessages] = useState([]);
   const [incidents, setIncidents] = useState([]);
+  const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
     loadMessages(activeChannel).then(setMessages);
@@ -96,6 +99,31 @@ function RealtimeWorkspace() {
     return () => supabase.removeChannel(channel);
   }, []);
 
+  useEffect(() => {
+    if (!profile.ready) return undefined;
+
+    const channel = supabase
+      .channel('monur-message-notifications')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'staff_messages' },
+        (payload) => {
+          const message = payload.new;
+          if (message.staff_name === profile.name) return;
+
+          pushNotification(setNotifications, {
+            channel: message.channel,
+            title: `${message.staff_name} escribió en #${getChannelName(message.channel)}`,
+            body: message.body,
+            onOpen: () => setActiveChannel(message.channel),
+          });
+        }
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, [profile.name, profile.ready]);
+
   async function sendMessage(body) {
     await supabase.from('staff_messages').insert({
       channel: activeChannel,
@@ -127,6 +155,13 @@ function RealtimeWorkspace() {
         committee: profile.committee,
         incident_id: data.id,
       });
+
+      pushNotification(setNotifications, {
+        channel: 'incidents',
+        title: `Incidente publicado en #${getChannelName('incidents')}`,
+        body: data.title,
+        onOpen: () => setActiveChannel('incidents'),
+      });
     }
   }
 
@@ -146,6 +181,10 @@ function RealtimeWorkspace() {
       onSend={sendMessage}
       onCreateIncident={createIncident}
       onUpdateIncidentStatus={updateIncidentStatus}
+      notifications={notifications}
+      onDismissNotification={(id) =>
+        setNotifications((current) => current.filter((notification) => notification.id !== id))
+      }
     />
   );
 }
@@ -153,38 +192,39 @@ function RealtimeWorkspace() {
 function DemoWorkspace() {
   const profile = useStaffProfile();
   const [activeChannel, setActiveChannel] = useState('general');
+  const [notifications, setNotifications] = useState([]);
   const [messages, setMessages] = useState([
     {
       id: 'demo-1',
       channel: 'general',
       body: 'Bienvenidos al canal operativo de MONUR XVIII.',
-      staff_name: 'Coordinacion General',
-      staff_role: 'Direccion',
-      committee: 'Secretaria',
+      staff_name: 'Coordinación General',
+      staff_role: 'Dirección',
+      committee: 'Secretaría',
       created_at: new Date().toISOString(),
     },
     {
       id: 'demo-2',
       channel: 'incidents',
-      body: 'Incidente reportado: retraso en acreditacion. Prioridad media.',
-      staff_name: 'Equipo Logistico',
+      body: 'Incidente reportado: retraso en acreditación. Prioridad media.',
+      staff_name: 'Equipo Logístico',
       staff_role: 'Staff',
-      committee: 'Logistica',
+      committee: 'Logística',
       created_at: new Date().toISOString(),
     },
   ]);
   const [incidents, setIncidents] = useState([
     {
       id: 'incident-demo-1',
-      title: 'Retraso en acreditacion',
-      type: 'Logistica',
+      title: 'Retraso en acreditación',
+      type: 'Logística',
       priority: 'media',
       status: 'abierto',
-      location: 'Area de registro',
+      location: 'Área de registro',
       description: 'Fila con alto volumen de participantes.',
-      reporter_name: 'Equipo Logistico',
+      reporter_name: 'Equipo Logístico',
       reporter_role: 'Staff',
-      committee: 'Logistica',
+      committee: 'Logística',
       created_at: new Date().toISOString(),
     },
   ]);
@@ -202,6 +242,12 @@ function DemoWorkspace() {
         created_at: new Date().toISOString(),
       },
     ]);
+    pushNotification(setNotifications, {
+      channel: activeChannel,
+      title: `Mensaje enviado en #${getChannelName(activeChannel)}`,
+      body,
+      onOpen: () => setActiveChannel(activeChannel),
+    });
   }
 
   function createIncident(payload) {
@@ -227,6 +273,12 @@ function DemoWorkspace() {
         created_at: new Date().toISOString(),
       },
     ]);
+    pushNotification(setNotifications, {
+      channel: 'incidents',
+      title: `Incidente publicado en #${getChannelName('incidents')}`,
+      body: incident.title,
+      onOpen: () => setActiveChannel('incidents'),
+    });
   }
 
   function updateIncidentStatus(id, status) {
@@ -247,6 +299,10 @@ function DemoWorkspace() {
       onSend={sendMessage}
       onCreateIncident={createIncident}
       onUpdateIncidentStatus={updateIncidentStatus}
+      notifications={notifications}
+      onDismissNotification={(id) =>
+        setNotifications((current) => current.filter((notification) => notification.id !== id))
+      }
       demo
     />
   );
@@ -261,6 +317,8 @@ function Workspace({
   onSend,
   onCreateIncident,
   onUpdateIncidentStatus,
+  notifications = [],
+  onDismissNotification,
   demo = false,
 }) {
   const active = channels.find((channel) => channel.id === activeChannel);
@@ -318,6 +376,8 @@ function Workspace({
         <IncidentForm onCreate={onCreateIncident} />
         <IncidentList incidents={incidents} onUpdateStatus={onUpdateIncidentStatus} />
       </aside>
+
+      <NotificationStack notifications={notifications} onDismiss={onDismissNotification} />
     </main>
   );
 }
@@ -339,11 +399,11 @@ function StaffEntry({ onSave, demo = false }) {
       <form className="entry-card" onSubmit={submit}>
         <div className="brand-icon"><UsersRound size={32} /></div>
         <h1>MONUR XVIII Staff Chat</h1>
-        <p>Ingrese su informacion para entrar al canal de comunicacion operativo.</p>
-        {demo && <div className="demo-banner">Modo demo. Al completar el .env usara Supabase en tiempo real.</div>}
+        <p>Ingrese su información para entrar al canal de comunicación operativo.</p>
+        {demo && <div className="demo-banner">Modo demo. Al completar el .env usará Supabase en tiempo real.</div>}
         <TextInput label="Nombre" value={form.name} onChange={(name) => setForm({ ...form, name })} required />
         <TextInput label="Rol o cargo" value={form.role} onChange={(role) => setForm({ ...form, role })} required />
-        <TextInput label="Comite o area" value={form.committee} onChange={(committee) => setForm({ ...form, committee })} required />
+        <TextInput label="Comité o área" value={form.committee} onChange={(committee) => setForm({ ...form, committee })} required />
         <button className="primary-button">Entrar al canal</button>
       </form>
     </main>
@@ -437,7 +497,7 @@ function IncidentForm({ onCreate }) {
 
       {open && (
         <form className="incident-form" onSubmit={submit}>
-          <TextInput label="Titulo" value={form.title} onChange={(title) => setForm({ ...form, title })} required />
+          <TextInput label="Título" value={form.title} onChange={(title) => setForm({ ...form, title })} required />
           <label className="field">
             <span>Tipo</span>
             <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
@@ -450,12 +510,12 @@ function IncidentForm({ onCreate }) {
               <option value="baja">Baja</option>
               <option value="media">Media</option>
               <option value="alta">Alta</option>
-              <option value="critica">Critica</option>
+              <option value="critica">Crítica</option>
             </select>
           </label>
-          <TextInput label="Ubicacion" value={form.location} onChange={(location) => setForm({ ...form, location })} required />
+          <TextInput label="Ubicación" value={form.location} onChange={(location) => setForm({ ...form, location })} required />
           <label className="field">
-            <span>Descripcion</span>
+            <span>Descripción</span>
             <textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} required />
           </label>
           <button className="primary-button">Guardar incidente</button>
@@ -483,13 +543,41 @@ function IncidentList({ incidents, onUpdateStatus }) {
           <small>Reportado por {incident.reporter_name}</small>
           <select value={incident.status} onChange={(event) => onUpdateStatus(incident.id, event.target.value)}>
             <option value="abierto">Abierto</option>
-            <option value="en_revision">En revision</option>
+            <option value="en_revision">En revisión</option>
             <option value="resuelto">Resuelto</option>
             <option value="cerrado">Cerrado</option>
           </select>
         </article>
       ))}
     </section>
+  );
+}
+
+function NotificationStack({ notifications, onDismiss }) {
+  if (notifications.length === 0) return null;
+
+  return (
+    <div className="notification-stack" aria-live="polite" aria-label="Notificaciones">
+      {notifications.map((notification) => (
+        <article key={notification.id} className="notification-toast">
+          <button className="notification-body" onClick={notification.onOpen}>
+            <span className="notification-channel">
+              <Megaphone size={15} />
+              #{getChannelName(notification.channel)}
+            </span>
+            <strong>{notification.title}</strong>
+            <span>{notification.body}</span>
+          </button>
+          <button
+            className="notification-close"
+            onClick={() => onDismiss(notification.id)}
+            aria-label="Cerrar notificación"
+          >
+            ×
+          </button>
+        </article>
+      ))}
+    </div>
   );
 }
 
@@ -559,6 +647,29 @@ function formatDateTime(value) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+}
+
+function getChannelName(channelId) {
+  return channelById[channelId]?.name || channelId;
+}
+
+function cleanPreview(value) {
+  return value.length > 120 ? `${value.slice(0, 117)}...` : value;
+}
+
+function pushNotification(setNotifications, notification) {
+  const nextNotification = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    ...notification,
+    body: cleanPreview(notification.body || ''),
+  };
+
+  setNotifications((current) => [nextNotification, ...current].slice(0, 4));
+  window.setTimeout(() => {
+    setNotifications((current) =>
+      current.filter((currentNotification) => currentNotification.id !== nextNotification.id)
+    );
+  }, 6500);
 }
 
 createRoot(document.getElementById('root')).render(<App />);

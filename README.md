@@ -1,6 +1,6 @@
 # MONUR XVIII Staff Chat
 
-Canal de comunicacion en tiempo real estilo Discord para el staff de MONUR XVIII. Incluye chat general, canal de incidentes, avisos y panel de incidentes activos.
+Canal de comunicación en tiempo real estilo Discord para el staff de MONUR XVIII. Incluye chat general, canal de incidentes, avisos y panel de incidentes activos.
 
 ## Supabase
 
@@ -13,7 +13,7 @@ Canal de comunicacion en tiempo real estilo Discord para el staff de MONUR XVIII
 
 ## Variables de entorno
 
-El archivo `.env` no debe subirse a GitHub. Ya esta protegido por `.gitignore`.
+El archivo `.env` no debe subirse a GitHub. Ya está protegido por `.gitignore`.
 
 Para desarrollo local, coloca:
 
@@ -44,4 +44,4 @@ http://localhost:5173
 3. Agrega `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY`.
 4. Deploy.
 
-Los mensajes e incidentes permanecen en Supabase aunque el usuario salga o cierre la pagina.
+Los mensajes e incidentes permanecen en Supabase aunque el usuario salga o cierre la página.
