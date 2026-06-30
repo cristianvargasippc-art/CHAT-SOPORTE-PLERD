@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createClient } from '@supabase/supabase-js';
+import DOMPurify from 'dompurify';
 import {
   Activity,
   AlertTriangle,
@@ -46,6 +47,13 @@ const channels = [
 
 const incidentTypes = ['Logística', 'Seguridad', 'Delegación', 'Protocolo', 'Tecnología', 'Salud', 'Otro'];
 const channelById = Object.fromEntries(channels.map((channel) => [channel.id, channel]));
+const FIELD_LIMITS = {
+  profile: 70,
+  message: 1500,
+  incidentTitle: 120,
+  incidentLocation: 120,
+  incidentDescription: 1200,
+};
 
 function App() {
   return supabase ? <RealtimeWorkspace /> : <DemoWorkspace />;
@@ -115,9 +123,11 @@ function RealtimeWorkspace() {
   }, [activeChannel, profile.name, profile.ready]);
 
   async function sendMessage(body) {
+    const cleanBody = sanitizePlainText(body, FIELD_LIMITS.message);
+    if (!cleanBody) return;
     const { error } = await supabase.from('staff_messages').insert({
       channel: activeChannel,
-      body,
+      body: cleanBody,
       staff_name: profile.name,
       staff_role: profile.role,
       committee: profile.committee,
@@ -126,16 +136,18 @@ function RealtimeWorkspace() {
   }
 
   async function createIncident(payload) {
+    const cleanPayload = sanitizeIncidentPayload(payload);
+    if (!cleanPayload) return;
     const { data } = await supabase
       .from('incidents')
-      .insert({ ...payload, reporter_name: profile.name, reporter_role: profile.role, committee: profile.committee })
+      .insert({ ...cleanPayload, reporter_name: profile.name, reporter_role: profile.role, committee: profile.committee })
       .select()
       .single();
 
     if (data) {
       await supabase.from('staff_messages').insert({
         channel: 'incidents',
-        body: `Incidente reportado: ${data.title}. Prioridad ${data.priority}.`,
+        body: sanitizePlainText(`Incidente reportado: ${data.title}. Prioridad ${data.priority}.`, FIELD_LIMITS.message),
         staff_name: profile.name,
         staff_role: profile.role,
         committee: profile.committee,
@@ -233,10 +245,12 @@ function DemoWorkspace() {
   }
 
   function sendMessage(body) {
+    const cleanBody = sanitizePlainText(body, FIELD_LIMITS.message);
+    if (!cleanBody) return;
     setMessages((current) => [...current, {
       id: `demo-message-${Date.now()}`,
       channel: activeChannel,
-      body,
+      body: cleanBody,
       staff_name: profile.name,
       staff_role: profile.role,
       committee: profile.committee,
@@ -245,15 +259,17 @@ function DemoWorkspace() {
     pushNotification(setNotifications, {
       channel: activeChannel,
       title: `Mensaje enviado en #${getChannelName(activeChannel)}`,
-      body,
+      body: cleanBody,
       onOpen: () => openChannel(activeChannel),
     });
   }
 
   function createIncident(payload) {
+    const cleanPayload = sanitizeIncidentPayload(payload);
+    if (!cleanPayload) return;
     const incident = {
       id: `demo-incident-${Date.now()}`,
-      ...payload,
+      ...cleanPayload,
       status: 'abierto',
       reporter_name: profile.name,
       reporter_role: profile.role,
@@ -264,7 +280,7 @@ function DemoWorkspace() {
     setMessages((current) => [...current, {
       id: `demo-message-${Date.now()}`,
       channel: 'incidents',
-      body: `Incidente reportado: ${incident.title}. Prioridad ${incident.priority}.`,
+      body: sanitizePlainText(`Incidente reportado: ${incident.title}. Prioridad ${incident.priority}.`, FIELD_LIMITS.message),
       staff_name: profile.name,
       staff_role: profile.role,
       committee: profile.committee,
@@ -352,7 +368,7 @@ function Workspace(props) {
             {demo && <span className="mode-pill">Demo sin Supabase</span>}
           </div>
         </header>
-        {activeChannel === 'general' && <CommandOverview incidents={incidents} messages={messages} profile={profile} />}
+        <ChannelOverview channelId={activeChannel} incidents={incidents} messages={messages} profile={profile} />
         <MessageList messages={messages} currentName={profile.name} />
         <Composer channelName={active.name} onSend={onSend} />
       </section>
@@ -366,16 +382,39 @@ function Workspace(props) {
   );
 }
 
-function CommandOverview({ incidents, messages, profile }) {
+function ChannelOverview({ channelId, incidents, messages, profile }) {
   const stats = useMemo(() => buildIncidentStats(incidents), [incidents]);
   const latestCritical = incidents.find((incident) => incident.priority === 'critica' && incident.status !== 'cerrado');
+  const channelConfig = {
+    general: {
+      eyebrow: 'Centro de mando activo',
+      title: `Bienvenido al canal general, ${profile.name.split(' ')[0] || 'Staff'}.`,
+      copy: 'Coordina al equipo, monitorea reportes y mantente al tanto de las incidencias más importantes desde una vista preparada para escritorio, tablet y teléfono.',
+      noteTitle: latestCritical ? latestCritical.title : 'Sin alertas críticas activas',
+      noteText: latestCritical ? `${latestCritical.location} - ${latestCritical.type}` : 'El equipo puede continuar operando desde el canal general.',
+    },
+    incidents: {
+      eyebrow: 'Seguimiento de incidentes',
+      title: 'Reporte, contexto y cierre de incidentes.',
+      copy: 'Registra novedades operativas, revisa prioridades y deja trazabilidad clara para que todo el staff pueda actuar rápido.',
+      noteTitle: latestCritical ? latestCritical.title : `${stats.open} incidentes activos`,
+      noteText: latestCritical ? `${latestCritical.location} - ${latestCritical.type}` : 'No hay incidentes críticos pendientes en este momento.',
+    },
+    announcements: {
+      eyebrow: 'Avisos para el equipo',
+      title: 'Comunicaciones breves y visibles.',
+      copy: 'Publica cambios de agenda, instrucciones generales y recordatorios importantes con el mismo formato del chat del staff.',
+      noteTitle: `${messages.length} avisos visibles`,
+      noteText: 'Mantén este canal reservado para mensajes que todo el equipo necesita leer.',
+    },
+  }[channelId];
 
   return (
     <section className="command-overview" aria-label="Resumen operativo">
       <div className="hero-brief">
-        <span className="eyebrow"><Activity size={15} /> Centro de mando activo</span>
-        <h2>Bienvenido al canal general, {profile.name.split(' ')[0] || 'Staff'}.</h2>
-        <p>Coordina al equipo, monitorea reportes y mantente al tanto de las incidencias más importantes desde una vista preparada para escritorio, tablet y teléfono.</p>
+        <span className="eyebrow"><Activity size={15} /> {channelConfig.eyebrow}</span>
+        <h2>{channelConfig.title}</h2>
+        <p>{channelConfig.copy}</p>
         <div className="hero-actions">
           <span><Circle size={10} fill="currentColor" /> {stats.open} abiertos</span>
           <span><TrendingUp size={15} /> {stats.total} reportes totales</span>
@@ -393,8 +432,8 @@ function CommandOverview({ incidents, messages, profile }) {
         <TypeChart counts={stats.byType} total={Math.max(stats.total, 1)} />
       </div>
       <div className="ops-note">
-        <strong>{latestCritical ? latestCritical.title : 'Sin alertas críticas activas'}</strong>
-        <span>{latestCritical ? `${latestCritical.location} - ${latestCritical.type}` : 'El equipo puede continuar operando desde el canal general.'}</span>
+        <strong>{channelConfig.noteTitle}</strong>
+        <span>{channelConfig.noteText}</span>
       </div>
     </section>
   );
@@ -450,9 +489,9 @@ function StaffEntry({ onSave, demo = false }) {
         <h1>MONUR XVIII Staff Chat</h1>
         <p>Ingrese su información para entrar al canal de comunicación operativo.</p>
         {demo && <div className="demo-banner">Modo demo. Al completar el .env usará Supabase en tiempo real.</div>}
-        <TextInput label="Nombre" value={form.name} onChange={(name) => setForm({ ...form, name })} required />
-        <TextInput label="Rol o cargo" value={form.role} onChange={(role) => setForm({ ...form, role })} required />
-        <TextInput label="Comité o área" value={form.committee} onChange={(committee) => setForm({ ...form, committee })} required />
+        <TextInput label="Nombre" value={form.name} onChange={(name) => setForm({ ...form, name })} maxLength={FIELD_LIMITS.profile} required />
+        <TextInput label="Rol o cargo" value={form.role} onChange={(role) => setForm({ ...form, role })} maxLength={FIELD_LIMITS.profile} required />
+        <TextInput label="Comité o área" value={form.committee} onChange={(committee) => setForm({ ...form, committee })} maxLength={FIELD_LIMITS.profile} required />
         <button className="primary-button entry-submit">Entrar al canal</button>
       </form>
     </main>
@@ -486,7 +525,7 @@ function Composer({ channelName, onSend }) {
 
   async function submit(event) {
     event.preventDefault();
-    const cleanBody = body.trim();
+    const cleanBody = sanitizePlainText(body, FIELD_LIMITS.message);
     if (!cleanBody || sending) return;
     setSending(true);
     setError('');
@@ -512,7 +551,8 @@ function Composer({ channelName, onSend }) {
       <div className="composer-input">
         <textarea
           value={body}
-          onChange={(event) => setBody(event.target.value)}
+          onChange={(event) => setBody(sanitizeEditableText(event.target.value, FIELD_LIMITS.message))}
+          maxLength={FIELD_LIMITS.message}
           onKeyDown={handleKeyDown}
           placeholder={`Enviar mensaje a #${channelName}`}
           aria-label={`Enviar mensaje a ${channelName}`}
@@ -539,11 +579,11 @@ function IncidentForm({ onCreate }) {
       <button className="incident-toggle" onClick={() => setOpen((value) => !value)}><AlertTriangle size={18} />Reportar incidente</button>
       {open && (
         <form className="incident-form" onSubmit={submit}>
-          <TextInput label="Título" value={form.title} onChange={(title) => setForm({ ...form, title })} required />
+          <TextInput label="Título" value={form.title} onChange={(title) => setForm({ ...form, title })} maxLength={FIELD_LIMITS.incidentTitle} required />
           <label className="field"><span>Tipo</span><select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>{incidentTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
           <label className="field"><span>Prioridad</span><select value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })}><option value="baja">Baja</option><option value="media">Media</option><option value="alta">Alta</option><option value="critica">Crítica</option></select></label>
-          <TextInput label="Ubicación" value={form.location} onChange={(location) => setForm({ ...form, location })} required />
-          <label className="field"><span>Descripción</span><textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} required /></label>
+          <TextInput label="Ubicación" value={form.location} onChange={(location) => setForm({ ...form, location })} maxLength={FIELD_LIMITS.incidentLocation} required />
+          <label className="field"><span>Descripción</span><textarea value={form.description} onChange={(event) => setForm({ ...form, description: sanitizeEditableText(event.target.value, FIELD_LIMITS.incidentDescription) })} maxLength={FIELD_LIMITS.incidentDescription} required /></label>
           <button className="primary-button">Guardar incidente</button>
         </form>
       )}
@@ -603,8 +643,9 @@ function useStaffProfile() {
     role: profile?.role || '',
     committee: profile?.committee || '',
     save(nextProfile) {
-      localStorage.setItem('monur_staff_profile', JSON.stringify(nextProfile));
-      setProfile(nextProfile);
+      const cleanProfile = sanitizeProfile(nextProfile);
+      localStorage.setItem('monur_staff_profile', JSON.stringify(cleanProfile));
+      setProfile(cleanProfile);
     },
     clear() {
       localStorage.removeItem('monur_staff_profile');
@@ -623,8 +664,19 @@ async function loadIncidents() {
   return data || [];
 }
 
-function TextInput({ label, value, onChange, type = 'text', required = false }) {
-  return <label className="field"><span>{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} required={required} /></label>;
+function TextInput({ label, value, onChange, type = 'text', required = false, maxLength = FIELD_LIMITS.profile }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(sanitizeEditableText(event.target.value, maxLength))}
+        maxLength={maxLength}
+        required={required}
+      />
+    </label>
+  );
 }
 
 function initials(name) {
@@ -643,8 +695,43 @@ function cleanPreview(value) {
   return value.length > 120 ? `${value.slice(0, 117)}...` : value;
 }
 
+function sanitizePlainText(value, maxLength = 500) {
+  return sanitizeEditableText(value, maxLength).replace(/\s+/g, ' ').trim();
+}
+
+function sanitizeEditableText(value, maxLength = 500) {
+  return DOMPurify
+    .sanitize(String(value ?? ''), { ALLOWED_TAGS: [], ALLOWED_ATTR: [] })
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .slice(0, maxLength);
+}
+
+function sanitizeProfile(profile) {
+  return {
+    name: sanitizePlainText(profile.name, FIELD_LIMITS.profile),
+    role: sanitizePlainText(profile.role, FIELD_LIMITS.profile),
+    committee: sanitizePlainText(profile.committee, FIELD_LIMITS.profile),
+  };
+}
+
+function sanitizeIncidentPayload(payload) {
+  const cleanPayload = {
+    title: sanitizePlainText(payload.title, FIELD_LIMITS.incidentTitle),
+    type: incidentTypes.includes(payload.type) ? payload.type : 'Otro',
+    priority: ['baja', 'media', 'alta', 'critica'].includes(payload.priority) ? payload.priority : 'media',
+    location: sanitizePlainText(payload.location, FIELD_LIMITS.incidentLocation),
+    description: sanitizePlainText(payload.description, FIELD_LIMITS.incidentDescription),
+  };
+  return cleanPayload.title && cleanPayload.location && cleanPayload.description ? cleanPayload : null;
+}
+
 function pushNotification(setNotifications, notification) {
-  const nextNotification = { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, ...notification, body: cleanPreview(notification.body || '') };
+  const nextNotification = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    ...notification,
+    title: sanitizePlainText(notification.title, 140),
+    body: cleanPreview(sanitizePlainText(notification.body, 180)),
+  };
   setNotifications((current) => [nextNotification, ...current].slice(0, 4));
   showBrowserNotification(nextNotification);
   window.setTimeout(() => {
